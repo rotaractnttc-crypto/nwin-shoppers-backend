@@ -2,6 +2,7 @@ const express = require("express");
 const { body, param, validationResult } = require("express-validator");
 const { pool } = require("../db/pool");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { asyncHandler } = require("../middleware/asyncHandler");
 
 const router = express.Router();
 
@@ -45,30 +46,30 @@ router.post(
 );
 
 // ---------- Seller: view own profile/status ----------
-router.get("/me", requireAuth, requireRole("seller", "admin"), async (req, res) => {
+router.get("/me", requireAuth, requireRole("seller", "admin"), asyncHandler(async (req, res) => {
   const { rows } = await pool.query("SELECT * FROM sellers WHERE user_id = $1", [req.user.id]);
   if (!rows.length) return res.status(404).json({ error: "No seller profile found." });
   res.json({ seller: rows[0] });
-});
+}));
 
 // ---------- Public: verified/approved sellers directory ----------
-router.get("/", async (_req, res) => {
+router.get("/", asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT id, business_name, description, location, made_in_nwin, created_at
      FROM sellers WHERE status = 'approved' ORDER BY created_at DESC`
   );
   res.json({ sellers: rows });
-});
+}));
 
 // ---------- ADMIN: list pending sellers ----------
-router.get("/admin/pending", requireAuth, requireRole("admin"), async (_req, res) => {
+router.get("/admin/pending", requireAuth, requireRole("admin"), asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT s.*, u.name AS applicant_name, u.email, u.phone
      FROM sellers s JOIN users u ON u.id = s.user_id
      WHERE s.status = 'pending' ORDER BY s.created_at ASC`
   );
   res.json({ sellers: rows });
-});
+}));
 
 // ---------- Seller: update own location/profile details ----------
 router.patch(
@@ -82,7 +83,7 @@ router.patch(
     body("description").optional({ nullable: true }).trim().isLength({ max: 1000 }).escape(),
   ],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const allowed = ["latitude", "longitude", "location", "description"];
     const fields = [];
     const params = [];
@@ -97,7 +98,7 @@ router.patch(
     );
     if (!rows.length) return res.status(404).json({ error: "No seller profile found." });
     res.json({ seller: rows[0] });
-  }
+  })
 );
 
 // ---------- ADMIN: approve / reject / suspend a seller ----------
@@ -107,7 +108,7 @@ router.patch(
   requireRole("admin"),
   [param("id").isUUID(), body("status").isIn(["approved", "rejected", "suspended", "pending"])],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE sellers SET status = $1, reviewed_by = $2, reviewed_at = now()
        WHERE id = $3 RETURNING *`,
@@ -121,7 +122,7 @@ router.patch(
       [req.user.id, req.params.id, JSON.stringify({ status: req.body.status })]
     );
     res.json({ seller: rows[0] });
-  }
+  })
 );
 
 module.exports = router;

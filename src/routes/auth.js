@@ -15,6 +15,7 @@ const {
   hashToken,
   refreshCookieOptions,
 } = require("../utils/tokens");
+const { asyncHandler } = require("../middleware/asyncHandler");
 
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -179,7 +180,7 @@ router.post("/refresh", async (req, res) => {
 });
 
 // ---------- LOGOUT ----------
-router.post("/logout", requireAuth, async (req, res) => {
+router.post("/logout", requireAuth, asyncHandler(async (req, res) => {
   const token = req.cookies?.refreshToken || req.body?.refreshToken;
   if (token) {
     await pool.query(
@@ -189,17 +190,17 @@ router.post("/logout", requireAuth, async (req, res) => {
   }
   res.clearCookie("refreshToken", { path: "/api/auth" });
   res.json({ ok: true });
-});
+}));
 
 // ---------- CURRENT USER ----------
-router.get("/me", requireAuth, async (req, res) => {
+router.get("/me", requireAuth, asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT id, name, email, phone, role, points, referral_code, email_verified, created_at FROM users WHERE id = $1`,
     [req.user.id]
   );
   if (!rows.length) return res.status(404).json({ error: "User not found." });
   res.json({ user: rows[0] });
-});
+}));
 
 // ---------- VERIFY EMAIL (OTP) ----------
 router.post(
@@ -239,14 +240,14 @@ router.post(
   authLimiter,
   [body("email").trim().isEmail().normalizeEmail()],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { rows } = await pool.query("SELECT id, email, email_verified FROM users WHERE email = $1", [req.body.email]);
     // Same response either way — don't reveal whether the email exists.
     if (rows.length && !rows[0].email_verified) {
       await issueOtp(rows[0].id, rows[0].email).catch((e) => console.error("otp email failed:", e.message));
     }
     res.json({ ok: true, note: "If that email exists and isn't verified yet, a new code was sent." });
-  }
+  })
 );
 
 // ---------- GOOGLE SIGN-IN ----------

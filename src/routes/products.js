@@ -2,6 +2,7 @@ const express = require("express");
 const { body, query, param, validationResult } = require("express-validator");
 const { pool } = require("../db/pool");
 const { requireAuth, requireRole, optionalAuth } = require("../middleware/auth");
+const { asyncHandler } = require("../middleware/asyncHandler");
 
 const router = express.Router();
 
@@ -22,7 +23,7 @@ router.get(
     query("limit").optional().isInt({ min: 1, max: 50 }).toInt(),
   ],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { q, category, deal, special } = req.query;
     const page = req.query.page || 1;
     const limit = req.query.limit || 20;
@@ -58,11 +59,11 @@ router.get(
     `;
     const { rows } = await pool.query(sql, params);
     res.json({ products: rows, page, limit });
-  }
+  })
 );
 
 // ---------- SELLER: view own products, any status ----------
-router.get("/mine", requireAuth, requireRole("seller", "admin"), async (req, res) => {
+router.get("/mine", requireAuth, requireRole("seller", "admin"), asyncHandler(async (req, res) => {
   const seller = await pool.query("SELECT id FROM sellers WHERE user_id = $1", [req.user.id]);
   if (!seller.rows.length) return res.json({ products: [] });
 
@@ -73,10 +74,10 @@ router.get("/mine", requireAuth, requireRole("seller", "admin"), async (req, res
     [seller.rows[0].id]
   );
   res.json({ products: rows });
-});
+}));
 
 // ---------- PUBLIC: single product with reviews ----------
-router.get("/:id", [param("id").isUUID()], handleValidation, async (req, res) => {
+router.get("/:id", [param("id").isUUID()], handleValidation, asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT p.*, s.business_name AS seller_name, s.made_in_nwin, c.slug AS category
      FROM products p
@@ -94,7 +95,7 @@ router.get("/:id", [param("id").isUUID()], handleValidation, async (req, res) =>
     [req.params.id]
   );
   res.json({ product: rows[0], reviews: reviews.rows });
-});
+}));
 
 // ---------- SELLER: create a product listing (goes in as 'pending' for admin review) ----------
 router.post(
@@ -152,7 +153,7 @@ router.put(
   requireRole("seller", "admin"),
   [param("id").isUUID()],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const allowed = ["name", "description", "price", "was_price", "stock", "category_id", "images"];
     const updates = [];
     const params = [];
@@ -180,7 +181,7 @@ router.put(
     const { rows } = await pool.query(sql, params);
     if (!rows.length) return res.status(404).json({ error: "Product not found or not yours to edit." });
     res.json({ product: rows[0], note: "Changes re-submitted for review." });
-  }
+  })
 );
 
 module.exports = router;

@@ -3,6 +3,7 @@ const { body, param, validationResult } = require("express-validator");
 const { pool } = require("../db/pool");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { broadcastOrderStatus } = require("../realtime");
+const { asyncHandler } = require("../middleware/asyncHandler");
 const { computeDeliveryFee } = require("../utils/geo");
 
 const router = express.Router();
@@ -110,7 +111,7 @@ router.post(
     body("delivery_longitude").optional({ nullable: true }).isFloat({ min: -180, max: 180 }),
   ],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { restaurant_id, delivery_latitude, delivery_longitude } = req.body;
     const { rows } = await pool.query("SELECT latitude, longitude FROM restaurants WHERE id = $1", [restaurant_id]);
     if (!rows.length) return res.status(404).json({ error: "Restaurant not found." });
@@ -121,21 +122,21 @@ router.post(
       destLng: delivery_longitude,
     });
     res.json(calc);
-  }
+  })
 );
 
 // ---------- Buyer: list own food orders ----------
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT fo.*, r.name AS restaurant_name FROM food_orders fo
      JOIN restaurants r ON r.id = fo.restaurant_id WHERE fo.buyer_id = $1 ORDER BY fo.created_at DESC`,
     [req.user.id]
   );
   res.json({ orders: rows });
-});
+}));
 
 // ---------- Rider: orders ready for pickup, unclaimed ----------
-router.get("/available", requireAuth, requireRole("rider", "admin"), async (_req, res) => {
+router.get("/available", requireAuth, requireRole("rider", "admin"), asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT fo.*, r.name AS restaurant_name, r.location AS restaurant_location
      FROM food_orders fo JOIN restaurants r ON r.id = fo.restaurant_id
@@ -143,10 +144,10 @@ router.get("/available", requireAuth, requireRole("rider", "admin"), async (_req
      ORDER BY fo.created_at ASC`
   );
   res.json({ orders: rows });
-});
+}));
 
 // ---------- Rider: orders currently claimed by me ----------
-router.get("/mine/claimed", requireAuth, requireRole("rider"), async (req, res) => {
+router.get("/mine/claimed", requireAuth, requireRole("rider"), asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT fo.*, r.name AS restaurant_name, r.location AS restaurant_location
      FROM food_orders fo JOIN restaurants r ON r.id = fo.restaurant_id
@@ -155,10 +156,10 @@ router.get("/mine/claimed", requireAuth, requireRole("rider"), async (req, res) 
     [req.user.id]
   );
   res.json({ orders: rows });
-});
+}));
 
 // ---------- Restaurant owner: incoming orders for my restaurant ----------
-router.get("/restaurant/:restaurantId", requireAuth, [param("restaurantId").isUUID()], handleValidation, async (req, res) => {
+router.get("/restaurant/:restaurantId", requireAuth, [param("restaurantId").isUUID()], handleValidation, asyncHandler(async (req, res) => {
   const owns = await pool.query(
     "SELECT 1 FROM restaurants WHERE id = $1 AND (owner_user_id = $2 OR $3 = 'admin')",
     [req.params.restaurantId, req.user.id, req.user.role]
@@ -169,10 +170,10 @@ router.get("/restaurant/:restaurantId", requireAuth, [param("restaurantId").isUU
     [req.params.restaurantId]
   );
   res.json({ orders: rows });
-});
+}));
 
 // ---------- One order + items + rider's last known position ----------
-router.get("/:id", requireAuth, [param("id").isUUID()], handleValidation, async (req, res) => {
+router.get("/:id", requireAuth, [param("id").isUUID()], handleValidation, asyncHandler(async (req, res) => {
   const orderRes = await pool.query(
     `SELECT fo.*, r.name AS restaurant_name, r.location AS restaurant_location
      FROM food_orders fo JOIN restaurants r ON r.id = fo.restaurant_id
@@ -196,7 +197,7 @@ router.get("/:id", requireAuth, [param("id").isUUID()], handleValidation, async 
   }
 
   res.json({ order, items: items.rows, riderLocation });
-});
+}));
 
 // ---------- Restaurant owner/admin: confirm, prep, mark ready ----------
 router.patch(
@@ -205,7 +206,7 @@ router.patch(
   requireRole("seller", "admin", "shopper"), // ownership checked below; any authenticated restaurant owner
   [param("id").isUUID(), body("status").isIn(["confirmed", "preparing", "ready_for_pickup", "cancelled"])],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const orderRes = await pool.query("SELECT restaurant_id FROM food_orders WHERE id = $1", [req.params.id]);
     if (!orderRes.rows.length) return res.status(404).json({ error: "Order not found." });
 
@@ -223,11 +224,11 @@ router.patch(
     );
     broadcastOrderStatus(req.params.id, req.body.status);
     res.json({ order: rows[0] });
-  }
+  })
 );
 
 // ---------- Rider: claim an order (atomic — first rider to claim wins) ----------
-router.post("/:id/claim", requireAuth, requireRole("rider"), [param("id").isUUID()], handleValidation, async (req, res) => {
+router.post("/:id/claim", requireAuth, requireRole("rider"), [param("id").isUUID()], handleValidation, asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `UPDATE food_orders SET rider_id = $1, status = 'claimed', updated_at = now()
      WHERE id = $2 AND status = 'ready_for_pickup' AND rider_id IS NULL
@@ -239,7 +240,7 @@ router.post("/:id/claim", requireAuth, requireRole("rider"), [param("id").isUUID
   }
   broadcastOrderStatus(req.params.id, "claimed");
   res.json({ order: rows[0] });
-});
+}));
 
 // ---------- Rider: mark picked up / delivered ----------
 router.patch(
@@ -248,7 +249,7 @@ router.patch(
   requireRole("rider"),
   [param("id").isUUID(), body("status").isIn(["picked_up", "delivered"])],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE food_orders SET status = $1, updated_at = now() WHERE id = $2 AND rider_id = $3 RETURNING *`,
       [req.body.status, req.params.id, req.user.id]
@@ -256,7 +257,7 @@ router.patch(
     if (!rows.length) return res.status(404).json({ error: "Order not found or not assigned to you." });
     broadcastOrderStatus(req.params.id, req.body.status);
     res.json({ order: rows[0] });
-  }
+  })
 );
 
 module.exports = router;

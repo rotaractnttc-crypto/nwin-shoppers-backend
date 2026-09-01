@@ -2,6 +2,7 @@ const express = require("express");
 const { body, param, validationResult } = require("express-validator");
 const { pool } = require("../db/pool");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { asyncHandler } = require("../middleware/asyncHandler");
 
 const router = express.Router();
 
@@ -34,7 +35,7 @@ router.post(
     body("image").optional().trim(),
   ],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const allowed = await ownsRestaurant(req.user.id, req.body.restaurant_id, req.user.role);
     if (!allowed) return res.status(403).json({ error: "Not your restaurant." });
 
@@ -49,7 +50,7 @@ router.post(
       [restaurant_id, name, description || null, price, category || "main", JSON.stringify(modifiers || []), image || null, status]
     );
     res.status(201).json({ menuItem: rows[0], note: status === "approved" ? "Added and live." : "Submitted for admin review." });
-  }
+  })
 );
 
 // ---------- Owner/admin: update or toggle availability ----------
@@ -58,7 +59,7 @@ router.put(
   requireAuth,
   [param("id").isUUID()],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const existing = await pool.query("SELECT restaurant_id FROM menu_items WHERE id = $1", [req.params.id]);
     if (!existing.rows.length) return res.status(404).json({ error: "Menu item not found." });
     const allowed = await ownsRestaurant(req.user.id, existing.rows[0].restaurant_id, req.user.role);
@@ -80,11 +81,11 @@ router.put(
       params
     );
     res.json({ menuItem: rows[0], note: "Changes re-submitted for review." });
-  }
+  })
 );
 
 // ---------- Owner: view own restaurant's full menu (any status) ----------
-router.get("/mine/:restaurantId", requireAuth, [param("restaurantId").isUUID()], handleValidation, async (req, res) => {
+router.get("/mine/:restaurantId", requireAuth, [param("restaurantId").isUUID()], handleValidation, asyncHandler(async (req, res) => {
   const allowed = await ownsRestaurant(req.user.id, req.params.restaurantId, req.user.role);
   if (!allowed) return res.status(403).json({ error: "Not your restaurant." });
   const { rows } = await pool.query(
@@ -92,17 +93,17 @@ router.get("/mine/:restaurantId", requireAuth, [param("restaurantId").isUUID()],
     [req.params.restaurantId]
   );
   res.json({ menuItems: rows });
-});
+}));
 
 // ---------- ADMIN: pending menu items ----------
-router.get("/admin/pending", requireAuth, requireRole("admin"), async (_req, res) => {
+router.get("/admin/pending", requireAuth, requireRole("admin"), asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT m.*, r.name AS restaurant_name
      FROM menu_items m JOIN restaurants r ON r.id = m.restaurant_id
      WHERE m.status = 'pending' ORDER BY m.created_at ASC`
   );
   res.json({ menuItems: rows });
-});
+}));
 
 // ---------- ADMIN: approve/reject ----------
 router.patch(
@@ -111,14 +112,14 @@ router.patch(
   requireRole("admin"),
   [param("id").isUUID(), body("status").isIn(["approved", "rejected", "disabled"])],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { rows } = await pool.query(
       "UPDATE menu_items SET status = $1, updated_at = now() WHERE id = $2 RETURNING *",
       [req.body.status, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: "Menu item not found." });
     res.json({ menuItem: rows[0] });
-  }
+  })
 );
 
 module.exports = router;

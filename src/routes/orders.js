@@ -3,6 +3,7 @@ const { body, param, validationResult } = require("express-validator");
 const { pool } = require("../db/pool");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { computeDeliveryFee } = require("../utils/geo");
+const { asyncHandler } = require("../middleware/asyncHandler");
 
 const router = express.Router();
 
@@ -134,7 +135,7 @@ router.post(
     body("delivery_longitude").optional({ nullable: true }).isFloat({ min: -180, max: 180 }),
   ],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { items, delivery_latitude, delivery_longitude } = req.body;
     const productIds = items.map((i) => i.product_id);
     const { rows } = await pool.query(
@@ -153,20 +154,20 @@ router.post(
       destLng: delivery_longitude,
     });
     res.json(calc);
-  }
+  })
 );
 
 // ---------- Buyer: list own orders ----------
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT * FROM orders WHERE buyer_id = $1 ORDER BY created_at DESC`,
     [req.user.id]
   );
   res.json({ orders: rows });
-});
+}));
 
 // ---------- Buyer: single order with items ----------
-router.get("/:id", requireAuth, [param("id").isUUID()], handleValidation, async (req, res) => {
+router.get("/:id", requireAuth, [param("id").isUUID()], handleValidation, asyncHandler(async (req, res) => {
   const orderRes = await pool.query(
     `SELECT * FROM orders WHERE id = $1 AND (buyer_id = $2 OR $3 IN ('admin','rider'))`,
     [req.params.id, req.user.id, req.user.role]
@@ -178,7 +179,7 @@ router.get("/:id", requireAuth, [param("id").isUUID()], handleValidation, async 
     [req.params.id]
   );
   res.json({ order: orderRes.rows[0], items: items.rows });
-});
+}));
 
 // ---------- Seller/rider/admin: update order status ----------
 router.patch(
@@ -187,14 +188,14 @@ router.patch(
   requireRole("seller", "rider", "admin"),
   [param("id").isUUID(), body("status").isIn(["confirmed", "out_for_delivery", "delivered", "cancelled"])],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE orders SET status = $1, updated_at = now() WHERE id = $2 RETURNING *`,
       [req.body.status, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: "Order not found." });
     res.json({ order: rows[0] });
-  }
+  })
 );
 
 module.exports = router;

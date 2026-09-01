@@ -2,6 +2,7 @@ const express = require("express");
 const { body, param, validationResult } = require("express-validator");
 const { pool } = require("../db/pool");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { asyncHandler } = require("../middleware/asyncHandler");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("admin"));
@@ -13,21 +14,21 @@ function handleValidation(req, res, next) {
 }
 
 // ---------- Products awaiting review ----------
-router.get("/products/pending", async (_req, res) => {
+router.get("/products/pending", asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT p.*, s.business_name AS seller_name
      FROM products p JOIN sellers s ON s.id = p.seller_id
      WHERE p.status = 'pending' ORDER BY p.created_at ASC`
   );
   res.json({ products: rows });
-});
+}));
 
 // ---------- Approve / reject a product ----------
 router.patch(
   "/products/:id/status",
   [param("id").isUUID(), body("status").isIn(["approved", "rejected", "disabled"])],
   handleValidation,
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE products SET status = $1, updated_at = now() WHERE id = $2 RETURNING *`,
       [req.body.status, req.params.id]
@@ -40,11 +41,11 @@ router.patch(
       [req.user.id, req.params.id, JSON.stringify({ status: req.body.status })]
     );
     res.json({ product: rows[0] });
-  }
+  })
 );
 
 // ---------- Dashboard stats ----------
-router.get("/stats", async (_req, res) => {
+router.get("/stats", asyncHandler(async (_req, res) => {
   const [users, sellers, products, orders, revenue, restaurants, foodOrders] = await Promise.all([
     pool.query(`SELECT count(*)::int AS n FROM users`),
     pool.query(`SELECT count(*)::int AS n FROM sellers WHERE status = 'approved'`),
@@ -63,6 +64,6 @@ router.get("/stats", async (_req, res) => {
     approvedRestaurants: restaurants.rows[0].n,
     totalFoodOrders: foodOrders.rows[0].n,
   });
-});
+}));
 
 module.exports = router;
